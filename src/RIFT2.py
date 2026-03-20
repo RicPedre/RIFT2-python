@@ -3,7 +3,7 @@ import numpy as np
 import yaml
 from src.phase_congruency.phasecong import phasecong
 from joblib import Parallel, delayed
-
+from tqdm import tqdm
 
 class RIFT2:
     def __init__(self, config_file=None, **external_params):
@@ -101,7 +101,10 @@ class RIFT2:
 
             return histo
 
-        des = Parallel(n_jobs=-1)(delayed(process_keypoint)(k) for k in range(n))
+        try:
+            des = list(tqdm(Parallel(n_jobs=-1, return_as='generator')(delayed(process_keypoint)(k) for k in range(n)), total=n, desc="Feature Description"))
+        except TypeError:
+            des = Parallel(n_jobs=-1)(delayed(process_keypoint)(k) for k in tqdm(range(n), desc="Feature Description Setup (Fast)"))
         des = np.array(des).T
 
         return des
@@ -171,7 +174,7 @@ class RIFT2:
 
         feat_index = 0
         kpts = np.zeros((3, key.shape[1] * 6))
-        for k in range(key.shape[1]):
+        for k in tqdm(range(key.shape[1]), desc="Orientation Calculation", leave=False):
             x = int(round(key[0, k]))
             y = int(round(key[1, k]))
             r = int(round(config['patch_size']))
