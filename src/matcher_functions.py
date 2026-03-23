@@ -42,6 +42,59 @@ def match_keypoints_nn(des1, des2, kp1, kp2, lowes_ratio=0.75, mutual=True):
 
     return points1, points2, mutual_matches
 
+def match_keypoints_flann(des1, des2, kp1, kp2, lowes_ratio=0.75, mutual=True):
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=50)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+    matches1 = flann.knnMatch(des1, des2, k=2)
+
+    if mutual:
+        matches2 = flann.knnMatch(des2, des1, k=2)
+        good_matches1 = []
+        for match_res in matches1:
+            if len(match_res) == 2:
+                m, n = match_res
+                if m.distance < lowes_ratio * n.distance:
+                    good_matches1.append(m)
+            elif len(match_res) == 1:
+                good_matches1.append(match_res[0])
+
+        good_matches2 = []
+        for match_res in matches2:
+            if len(match_res) == 2:
+                m, n = match_res
+                if m.distance < lowes_ratio * n.distance:
+                    good_matches2.append(m)
+            elif len(match_res) == 1:
+                good_matches2.append(match_res[0])
+
+        # Fast O(N) mutual match lookup
+        good2_dict = {m.queryIdx: m.trainIdx for m in good_matches2}
+        
+        mutual_matches = []
+        for m in good_matches1:
+            if good2_dict.get(m.trainIdx) == m.queryIdx:
+                mutual_matches.append(m)
+    else:
+        mutual_matches = []
+        for match_res in matches1:
+            if len(match_res) == 2:
+                m, n = match_res
+                if m.distance < lowes_ratio * n.distance:
+                    mutual_matches.append(m)
+            elif len(match_res) == 1:
+                mutual_matches.append(match_res[0])
+
+    if len(mutual_matches) == 0:
+        return np.empty((0,2), dtype=np.float32), np.empty((0,2), dtype=np.float32), []
+
+    points1 = np.float32([kp1[m.queryIdx].pt for m in mutual_matches]).reshape(-1, 2)
+    points2 = np.float32([kp2[m.trainIdx].pt for m in mutual_matches]).reshape(-1, 2)
+
+    return points1, points2, mutual_matches
+
 
 
 def outlier_removal(points1,points2):

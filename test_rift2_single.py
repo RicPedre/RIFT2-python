@@ -80,7 +80,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test RIFT2 matching on a single designated resolution pair.")
     parser.add_argument("--res", type=str, required=True, choices=['sub32', 'sub16', 'sub8', 'sub4', 'sub2', 'full'],
                         help="The predefined resolution prefix to test.")
+    parser.add_argument("--source_folder", type=str, default="tif_test",
+                        help="Folder containing the source images to process.")
+    parser.add_argument("--target_folder", type=str, default=".",
+                        help="Folder where the resulting image and txt files will be saved.")
     args = parser.parse_args()
+
+    # Ensure target directory exists
+    if args.target_folder:
+        os.makedirs(args.target_folder, exist_ok=True)
 
     # Capture the user's choice
     res = args.res
@@ -106,8 +114,8 @@ if __name__ == "__main__":
     # Filtering out noisy high-frequency artifacts requires a progressively larger wavelength at higher resolutions.
     min_wl_map = { 'sub32': 3, 'sub16': 3, 'sub8': 3, 'sub4': 3, 'sub2': 6, 'full': 12 }
 
-    # Set the target folder and interpolate the expected file names
-    image_folder_path = "tif_test"
+    # Set the source folder and interpolate the expected file names
+    image_folder_path = args.source_folder
     if res == 'full':
         left_name = 'left_proj.tif'
         right_name = 'right_proj.tif'
@@ -214,7 +222,7 @@ if __name__ == "__main__":
         print(f'Verified solid geometric Inliers (MAGSAC output): {num_inliers}')
 
         # Save the drawn visual comparison straight to disk
-        out_img_name = f'result_matches_{res}.jpg'
+        out_img_name = os.path.join(args.target_folder, f'result_matches_{res}.jpg')
         cv2.imwrite(out_img_name, img3)
         print(f"Saved visual match map preview to: {out_img_name}")
         
@@ -223,22 +231,46 @@ if __name__ == "__main__":
         gc.collect()
 
         # ==============================
-        # CSV RECORD EXPORT FOR PIPELINE
+        # PLAIN-TEXT ASP MATCH EXPORT
         # ==============================
-        # Export the matched left/right X,Y coordinates. This generic CSV format can then be independently
-        # digested, evaluated, or translated to .match binary files for execution in the AMES Stereo Pipeline (ASP).
-        csv_name = f'matches_{res}.csv'
-        with open(csv_name, mode='w', newline='') as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(['left_x', 'left_y', 'right_x', 'right_y', 'inlier'])
-            
+        # Export the matched left/right X,Y coordinates in plain-text format compatible with the
+        # Ames Stereo Pipeline (ASP) bundle adjustment.
+        # Format requirement: x1 y1 unc1 x2 y2 unc2
+        # where x1, y1 are left image coordinates, x2, y2 are right image coordinates.
+        # The coordinates are scaled back to the full resolution image size to allow testing 
+        # on downscaled imagery while seamlessly applying the resulting match file to the 
+        # original full-res pipeline.
+        
+        # Calculate the dynamic scaling factor required to scale points back to full-res
+        if res == 'full':
+            scale_factor = 1.0
+        else:
+            # Extract the scaling multiplier from the resolution string (e.g. 'sub4' -> 4.0)
+            scale_factor = float(res.replace('sub', ''))
+
+        match_name = os.path.join(args.target_folder, f'matches_{res}.txt')
+        with open(match_name, mode='w') as match_file:
             # Iterate sequentially through the correlated points 
             for idx, (p1, p2) in enumerate(zip(points1, points2)):
-                # Write a binary '1' if MAGSAC validated this feature point, otherwise '0'
-                inlier = 1 if matchesMask[idx] else 0
-                writer.writerow([p1[0], p1[1], p2[0], p2[1], inlier])
+                # Only write MAGSAC-verified inliers to avoid injecting mathematically invalid points 
+                # into the bundle adjustment solver.
+                if matchesMask[idx]:
+                    # Project local subset coordinates back to the full overarching resolution footprint
+                    x1 = p1[0] * scale_factor
+                    y1 = p1[1] * scale_factor
+                    x2 = p2[0] * scale_factor
+                    y2 = p2[1] * scale_factor
+                    
+                    # Uncertainty weighting: in ASP, bundle adjustment weight = 1 / uncertainty. 
+                    # The uncertainties must be strictly positive.
+                    # We assign a standard nominal uncertainty of 1.0 pixel for all verified matches.
+                    unc1 = 1.0 * scale_factor
+                    unc2 = 1.0 * scale_factor
+                    
+                    # Write the 6 space-separated floating-point values to generate the plain-text file
+                    match_file.write(f"{x1:.4f} {y1:.4f} {unc1:.4f} {x2:.4f} {y2:.4f} {unc2:.4f}\n")
                 
-        print(f"Saved raw X/Y match mapping coordinates to: {csv_name}")
+        print(f"Saved scaled ASP-compatible match coordinates to: {match_name}")
 
         # Drop large structural references ahead of Python shutdown to prevent delayed garbage collection faults
         del img1, img2, kp1, des1, kp2, des2, points1, points2, mutual_matches, matchesMask
