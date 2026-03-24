@@ -172,3 +172,5 @@ third_party/
 *.tif
 *.png
 *.bmp
+*.match
+/dlr_opposite
